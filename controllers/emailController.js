@@ -1,28 +1,39 @@
 const nodemailer = require('nodemailer');
-require('dotenv').config();
 
 const sendMeetingEmail = async (req, res) => {
+    console.log("📩 Start Sending Email");
+
+    // Destructure request body
     const {
         receiverEmail,
-        candidateName,
-        interviewerName = 'Not Assigned', // Added fallback
+        candidateName="Not Assigned",
+        interviewerName = 'Not Assigned',
         roomLink,
         interviewTime,
         message
     } = req.body;
 
-    // Email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(receiverEmail)) {
-        return res.status(400).json({ error: 'Invalid email address' });
+    console.log("➡️ Request Body:", req.body);
+
+    // ✅ Input Validation
+    if (!receiverEmail || !candidateName || !roomLink) {
+        return res.status(400).json({
+            success: false,
+            error: 'Missing required fields: receiverEmail, candidateName, or roomLink'
+        });
     }
 
-    if (!receiverEmail || !candidateName || !roomLink) {
-        return res.status(400).json({ error: 'Missing required fields' });
+    // ✅ Ensure Email Config is Set
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+        console.error('❌ Missing email credentials in environment variables.');
+        return res.status(500).json({
+            success: false,
+            error: 'Email configuration is missing',
+        });
     }
 
     try {
-        // Create reusable transporter
+        // ✅ Create Transporter
         const transporter = nodemailer.createTransport({
             service: 'gmail',
             auth: {
@@ -35,10 +46,10 @@ const sendMeetingEmail = async (req, res) => {
             timeout: 10000
         });
 
-        // Verify transporter connection
+        // ✅ Verify Transporter
         await transporter.verify();
 
-        // Enhanced Email Content with Styling
+        // ✅ Email Content
         const mailOptions = {
             from: `"Live Coding Platform" <${process.env.EMAIL_USER}>`,
             to: receiverEmail,
@@ -51,15 +62,18 @@ const sendMeetingEmail = async (req, res) => {
                     border-radius: 8px;
                     border: 1px solid #e0e0e0;
                     color: #333;
+                    max-width: 600px;
+                    margin: 20px auto;
                 ">
-                    <h2 style="color: #4CAF50; margin-bottom: 10px;">🎯 New Interview Meeting Request</h2>
+                    <h2 style="color: #4CAF50; margin-bottom: 10px;">🎯 New Interview Request</h2>
+                    
                     <p style="font-size: 16px; line-height: 24px;">
                         <strong>👤 Candidate Name:</strong> ${candidateName} <br>
                         <strong>👨‍💼 Interviewer Name:</strong> ${interviewerName} <br>
                         <strong>📅 Scheduled Time:</strong> ${interviewTime || 'To be confirmed'} <br>
                         <strong>🔗 Room Link:</strong> <a href="${roomLink}" target="_blank" style="color: #4CAF50; text-decoration: none;">Join Meeting</a>
                     </p>
-                    
+
                     ${message ? `
                         <div style="
                             margin-top: 20px;
@@ -77,18 +91,27 @@ const sendMeetingEmail = async (req, res) => {
                         🚀 Kindly join the session on time. If you have any issues, contact support.
                     </p>
                 </div>
-            `,
+            `
         };
 
-        // Send the email
-        const info = await transporter.sendMail(mailOptions);
-        console.log(info)
+        console.log("➡️ Sending email to:", receiverEmail);
 
-        res.status(200).json({ success: true, messageId: info.messageId });
+        // ✅ Send Email
+        const info = await transporter.sendMail(mailOptions);
+        console.log(`✅ Email sent to ${receiverEmail}, Message ID: ${info.messageId}`);
+
+        // ✅ Success Response
+        return res.status(200).json({
+            success: true,
+            messageId: info.messageId,
+            message: `Email sent successfully to ${receiverEmail}`,
+        });
 
     } catch (error) {
-        console.error('Email error:', error);
-        res.status(500).json({
+        console.error('❌ Email sending error:', error);
+
+        // ✅ Error Response
+        return res.status(500).json({
             success: false,
             error: 'Failed to send email',
             details: process.env.NODE_ENV === 'development' ? error.message : undefined

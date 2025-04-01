@@ -1,6 +1,6 @@
 const io = require('socket.io');
+const config = require('../config/signalingConfig');
 
-// Enhanced room management with more metadata
 let rooms = new Map();
 
 class Room {
@@ -9,29 +9,22 @@ class Room {
         this.interviewer = interviewer;
         this.candidate = null;
         this.createdAt = new Date();
-        this.status = 'waiting'; // waiting, active, ended
-        this.connections = new Set();
         this.lastActivity = new Date();
-        this.maxParticipants = 2;
     }
 }
 
 const setupSocket = (server) => {
     const socketServer = io(server, {
-        cors: {
-            origin: process.env.FRONTEND_URL || '*',
-            methods: ['GET', 'POST'],
-            credentials: true
-        },
-        pingTimeout: 20000,
-        pingInterval: 25000
+        cors: config.CORS_OPTIONS,
+        pingTimeout: config.PING_TIMEOUT,
+        pingInterval: config.PING_INTERVAL
     });
 
-    socketServer.on('connection', (socket) => {
+    socketServer.on(config.SOCKET_EVENTS.CONNECTION, (socket) => {
         console.log('User connected:', socket.id);
 
-        // Create room with enhanced validation
-        socket.on('create-room', (roomId, callback) => {
+        // Create room
+        socket.on(config.SOCKET_EVENTS.CREATE_ROOM, (roomId, callback) => {
             try {
                 if (rooms.has(roomId)) {
                     throw new Error('Room already exists');
@@ -40,44 +33,34 @@ const setupSocket = (server) => {
                 const room = new Room(roomId, socket.id);
                 rooms.set(roomId, room);
                 socket.join(roomId);
-                
-                // Send room creation confirmation
+
                 callback?.({ success: true, roomId });
                 console.log(`Room ${roomId} created by ${socket.id}`);
-
-                // Set room cleanup timeout
-                setTimeout(() => checkRoomActivity(roomId), 24 * 60 * 60 * 1000); // 24 hours
             } catch (error) {
                 console.error(`Room creation error: ${error.message}`);
                 callback?.({ success: false, error: error.message });
             }
         });
 
-        // Join room with enhanced validation
-        socket.on('join-room', (roomId, callback) => {
+        // Join room
+        socket.on(config.SOCKET_EVENTS.JOIN_ROOM, (roomId, callback) => {
             try {
                 const room = rooms.get(roomId);
                 if (!room) {
                     throw new Error('Room not found');
                 }
 
-                if (room.status === 'ended') {
-                    throw new Error('Room has ended');
-                }
-
-                if (room.connections.size >= room.maxParticipants) {
+                if (room.candidate) {
                     throw new Error('Room is full');
                 }
 
                 room.candidate = socket.id;
-                room.connections.add(socket.id);
-                room.status = 'active';
                 room.lastActivity = new Date();
-                
+
                 socket.join(roomId);
 
-                // Notify interviewer with candidate details
-                socketServer.to(room.interviewer).emit('candidate-joined', {
+                // Notify interviewer
+                socketServer.to(room.interviewer).emit(config.SOCKET_EVENTS.CANDIDATE_JOINED, {
                     candidateId: socket.id,
                     timestamp: new Date()
                 });
@@ -85,26 +68,25 @@ const setupSocket = (server) => {
                 callback?.({ success: true, roomId });
                 console.log(`User ${socket.id} joined room ${roomId}`);
             } catch (error) {
-                console.error(`Room join error: ${error.message}`);
+                console.error(`Join room error: ${error.message}`);
                 callback?.({ success: false, error: error.message });
             }
         });
 
-        // Enhanced signaling with error handling
-        socket.on('offer', (offer, roomId, callback) => {
+        // Offer signaling
+        socket.on(config.SOCKET_EVENTS.OFFER, (offer, roomId, callback) => {
             try {
                 const room = rooms.get(roomId);
-                if (!room) {
-                    throw new Error('Room not found');
-                }
+                if (!room) throw new Error('Room not found');
 
                 room.lastActivity = new Date();
-                socket.to(roomId).emit('offer', {
+
+                socket.to(roomId).emit(config.SOCKET_EVENTS.OFFER, {
                     offer,
                     from: socket.id,
                     timestamp: new Date()
                 });
-                
+
                 callback?.({ success: true });
             } catch (error) {
                 console.error(`Offer error: ${error.message}`);
@@ -112,21 +94,20 @@ const setupSocket = (server) => {
             }
         });
 
-        // Enhanced answer handling
-        socket.on('answer', (answer, roomId, callback) => {
+        // Answer signaling
+        socket.on(config.SOCKET_EVENTS.ANSWER, (answer, roomId, callback) => {
             try {
                 const room = rooms.get(roomId);
-                if (!room) {
-                    throw new Error('Room not found');
-                }
+                if (!room) throw new Error('Room not found');
 
                 room.lastActivity = new Date();
-                socket.to(roomId).emit('answer', {
+
+                socket.to(roomId).emit(config.SOCKET_EVENTS.ANSWER, {
                     answer,
                     from: socket.id,
                     timestamp: new Date()
                 });
-                
+
                 callback?.({ success: true });
             } catch (error) {
                 console.error(`Answer error: ${error.message}`);
@@ -134,21 +115,18 @@ const setupSocket = (server) => {
             }
         });
 
-        // Enhanced ICE candidate handling
-        socket.on('ice-candidate', (candidate, roomId, callback) => {
+        // ICE candidate
+        socket.on(config.SOCKET_EVENTS.ICE_CANDIDATE, (candidate, roomId, callback) => {
             try {
                 const room = rooms.get(roomId);
-                if (!room) {
-                    throw new Error('Room not found');
-                }
+                if (!room) throw new Error('Room not found');
 
-                room.lastActivity = new Date();
-                socket.to(roomId).emit('ice-candidate', {
+                socket.to(roomId).emit(config.SOCKET_EVENTS.ICE_CANDIDATE, {
                     candidate,
                     from: socket.id,
                     timestamp: new Date()
                 });
-                
+
                 callback?.({ success: true });
             } catch (error) {
                 console.error(`ICE candidate error: ${error.message}`);
@@ -156,25 +134,8 @@ const setupSocket = (server) => {
             }
         });
 
-        // Enhanced disconnect handling
-        socket.on('disconnect', () => {
-            console.log('User disconnected:', socket.id);
-            handleDisconnect(socket.id, socketServer);
-        });
-
-        // Add connection quality monitoring
-        socket.on('connection-quality', (data, roomId) => {
-            const room = rooms.get(roomId);
-            if (room) {
-                socketServer.to(roomId).emit('quality-update', {
-                    userId: socket.id,
-                    ...data
-                });
-            }
-        });
-
-        // Add explicit room leave handling
-        socket.on('leave-room', (roomId, callback) => {
+        // Leave room
+        socket.on(config.SOCKET_EVENTS.LEAVE_ROOM, (roomId, callback) => {
             try {
                 handleLeaveRoom(socket.id, roomId, socketServer);
                 callback?.({ success: true });
@@ -182,82 +143,45 @@ const setupSocket = (server) => {
                 callback?.({ success: false, error: error.message });
             }
         });
+
+        // Handle disconnect
+        socket.on(config.SOCKET_EVENTS.DISCONNECT, () => {
+            console.log('User disconnected:', socket.id);
+            handleDisconnect(socket.id, socketServer);
+        });
     });
 };
 
-// Helper functions
+// Disconnect logic
 const handleDisconnect = (socketId, socketServer) => {
     rooms.forEach((room, roomId) => {
         if (room.interviewer === socketId || room.candidate === socketId) {
-            room.connections.delete(socketId);
-            
-            // Notify remaining participants
-            socketServer.to(roomId).emit('participant-disconnected', {
+            socketServer.to(roomId).emit(config.SOCKET_EVENTS.PARTICIPANT_DISCONNECTED, {
                 userId: socketId,
                 timestamp: new Date()
             });
 
-            // Clean up room if empty
-            if (room.connections.size === 0) {
-                rooms.delete(roomId);
-                console.log(`Room ${roomId} cleaned up`);
-            } else if (room.interviewer === socketId) {
-                room.status = 'ended';
-                socketServer.to(roomId).emit('room-ended', {
-                    reason: 'Interviewer disconnected'
-                });
-            }
+            rooms.delete(roomId);
+            console.log(`Room ${roomId} deleted`);
         }
     });
 };
 
+// Leave room logic
 const handleLeaveRoom = (socketId, roomId, socketServer) => {
     const room = rooms.get(roomId);
     if (room) {
-        room.connections.delete(socketId);
-        socketServer.to(roomId).emit('participant-left', {
-            userId: socketId,
-            timestamp: new Date()
-        });
+        if (room.interviewer === socketId || room.candidate === socketId) {
+            socketServer.to(roomId).emit(config.SOCKET_EVENTS.PARTICIPANT_LEFT, {
+                userId: socketId,
+                timestamp: new Date()
+            });
 
-        if (room.connections.size === 0) {
             rooms.delete(roomId);
+            console.log(`Room ${roomId} deleted`);
         }
     }
 };
 
-const checkRoomActivity = (roomId) => {
-    const room = rooms.get(roomId);
-    if (room) {
-        const inactiveTime = Date.now() - room.lastActivity.getTime();
-        if (inactiveTime > 24 * 60 * 60 * 1000) { // 24 hours
-            rooms.delete(roomId);
-            console.log(`Inactive room ${roomId} cleaned up`);
-        }
-    }
-};
+module.exports = { setupSocket };
 
-module.exports = { 
-    setupSocket, 
-    createSignaling: (roomId) => {
-        if (rooms.has(roomId)) {
-            throw new Error('Room already exists');
-        }
-        rooms.set(roomId, new Room(roomId));
-    },
-    joinSignaling: (roomId) => {
-        if (!rooms.has(roomId)) {
-            throw new Error('Room does not exist');
-        }
-        return rooms.get(roomId);
-    },
-    getRoomStatus: (roomId) => {
-        const room = rooms.get(roomId);
-        return room ? {
-            status: room.status,
-            participants: room.connections.size,
-            createdAt: room.createdAt,
-            lastActivity: room.lastActivity
-        } : null;
-    }
-};

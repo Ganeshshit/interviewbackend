@@ -47,6 +47,7 @@ const callController = {
                     message: 'Call not found'
                 });
             }
+         
 
             if (call.status === 'ended') {
                 return res.status(400).json({
@@ -78,6 +79,7 @@ const callController = {
             res.status(500).json({
                 success: false,
                 message: 'Failed to join call',
+                message: 'An unexpected error occurred. Please try again later.',
                 error: error.message
             });
         }
@@ -295,7 +297,7 @@ const callController = {
         try {
             const { callId, participantId } = req.body;
             const call = await Call.findById(callId);
-            
+
             if (!call) {
                 return res.status(404).json({
                     success: false,
